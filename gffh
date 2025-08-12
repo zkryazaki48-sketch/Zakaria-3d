@@ -1,0 +1,429 @@
+<!doctype html>
+<html lang="ar">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1" />
+<title>غابة عشعاشة — 3D (زكريا) — نسخة جرافيك عالي (موبايل)</title>
+<style>
+  html,body{height:100%;margin:0;background:#0b1210;color:#fff;font-family:Tahoma,Arial}
+  #container{width:100%;height:100vh;position:relative;overflow:hidden}
+  #hud{position:absolute;left:12px;top:12px;background:rgba(0,0,0,0.35);padding:10px;border-radius:8px;z-index:20}
+  #hud h1{margin:0;font-size:16px}
+  #hud p{margin:6px 0;font-size:13px}
+  #nameTag{position:absolute;color:#fff;font-weight:700;text-shadow:0 2px 6px rgba(0,0,0,.8);pointer-events:none;z-index:20}
+  #controls{position:absolute;right:8px;bottom:8px;z-index:30;display:flex;gap:8px;align-items:flex-end}
+  /* joystick */
+  #joy{width:140px;height:140px;border-radius:50%;background:rgba(0,0,0,0.18);touch-action:none;position:relative}
+  #stick{width:60px;height:60px;border-radius:50%;background:rgba(255,255,255,0.18);position:absolute;left:40px;top:40px;transform:translate(0,0)}
+  /* buttons */
+  .btn{width:60px;height:60px;border-radius:12px;background:rgba(0,0,0,0.28);display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;font-size:16px}
+  #btnJump{margin-left:6px}
+  #performance{position:absolute;left:12px;bottom:12px;background:rgba(0,0,0,0.25);padding:6px 8px;border-radius:8px;font-size:12px;z-index:20}
+  /* loading */
+  #loading{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:linear-gradient(180deg,rgba(5,10,7,0.85),rgba(0,0,0,0.6));z-index:50;font-size:18px}
+  /* small screens adjustments */
+  @media (max-width:420px){
+    #joy{width:120px;height:120px} #stick{width:50px;height:50px;left:35px;top:35px}
+    .btn{width:56px;height:56px}
+  }
+</style>
+</head>
+<body>
+  <div id="container"></div>
+  <div id="loading">جارٍ التحميل — انتظر قليلًا...</div>
+  <div id="hud">
+    <h1>لعبة غابة عشعاشة — زكريا</h1>
+    <p>النقاط: <span id="score">0</span> • الوقت: <span id="timer">180</span>s</p>
+    <p style="font-size:12px;color:#bbb">تحكم: عصا افتراضية / قفز / جري</p>
+  </div>
+  <div id="nameTag">زكريا</div>
+  <div id="controls">
+    <div id="joy" aria-label="joystick">
+      <div id="stick"></div>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:8px;">
+      <div id="btnJump" class="btn">قفز</div>
+      <div id="btnRun" class="btn">جرّ</div>
+    </div>
+  </div>
+  <div id="performance">LOD: NORMAL</div>
+
+  <!-- Three.js (مستخدمة من CDN ثابت) -->
+  <script src="https://cdn.jsdelivr.net/npm/three@0.155.0/build/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.155.0/examples/js/loaders/GLTFLoader.js"></script>
+  <script>
+  // ======= إعداد المشهد =======
+  const container = document.getElementById('container');
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x0b1210);
+  scene.fog = new THREE.FogExp2(0x0b1210, 0.0025);
+
+  const renderer = new THREE.WebGLRenderer({antialias:true, powerPreference:'high-performance'});
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1.5, 2));
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  container.appendChild(renderer.domElement);
+
+  const camera = new THREE.PerspectiveCamera(60, window.innerWidth/window.innerHeight, 0.1, 2000);
+  camera.position.set(0, 5, 12);
+
+  // إضاءة رئيسية واقعية
+  const hemi = new THREE.HemisphereLight(0xdfefff, 0x11110f, 0.8);
+  scene.add(hemi);
+  const sun = new THREE.DirectionalLight(0xfff4d8, 1.0);
+  sun.position.set(-40, 80, -30);
+  sun.castShadow = true;
+  sun.shadow.camera.left = -80; sun.shadow.camera.right = 80; sun.shadow.camera.top = 80; sun.shadow.camera.bottom = -80;
+  sun.shadow.mapSize.set(2048, 2048);
+  scene.add(sun);
+
+  // ضوء منعكس بسيط لتحسين اللمعان
+  const amb = new THREE.AmbientLight(0x222222, 0.7);
+  scene.add(amb);
+
+  // ======= أرضية ذات تفاصيل (خريطة ارتفاع بسيطة) =======
+  const groundGeo = new THREE.PlaneGeometry(400, 400, 256, 256);
+  // تعديل إرتفاعات للنتوءات الصغيرة
+  for(let i=0;i<groundGeo.attributes.position.count;i++){
+    const y = (Math.random()-0.5) * 0.8 * Math.exp(-Math.random()*3);
+    groundGeo.attributes.position.setY(i, groundGeo.attributes.position.getY(i) + y);
+  }
+  groundGeo.computeVertexNormals();
+
+  const groundMat = new THREE.MeshStandardMaterial({
+    color: 0x1f6b3f,
+    roughness: 1.0,
+    metalness: 0.0
+  });
+  const ground = new THREE.Mesh(groundGeo, groundMat);
+  ground.rotation.x = -Math.PI/2;
+  ground.receiveShadow = true;
+  scene.add(ground);
+
+  // إضافة نقاط عشب بواسطة plane مع شفافية (قابلة للتكرار) — يعطي إحساس كثافة للعشب
+  const grassTex = new THREE.Texture(generateGrassCanvas());
+  grassTex.needsUpdate = true;
+  const grassMat = new THREE.MeshStandardMaterial({map: grassTex, transparent:true, alphaTest:0.5, side:THREE.DoubleSide});
+  const grassPlane = new THREE.PlaneGeometry(1.8, 1.8);
+  // نضع الكثير من أرواح العشب كـInstancedMesh لتحسين الأداء
+  const grassCount = 1200;
+  const grassInst = new THREE.InstancedMesh(grassPlane, grassMat, grassCount);
+  grassInst.castShadow = true;
+  grassInst.receiveShadow = false;
+  const dummy = new THREE.Object3D();
+  for(let i=0;i<grassCount;i++){
+    const x = (Math.random()-0.5) * 300;
+    const z = (Math.random()-0.5) * 300;
+    dummy.position.set(x, 0.1 + (Math.random()-0.5)*0.2, z);
+    dummy.rotation.y = Math.random()*Math.PI;
+    const s = 0.6 + Math.random()*1.4; dummy.scale.set(s, s, s);
+    dummy.updateMatrix();
+    grassInst.setMatrixAt(i, dummy.matrix);
+  }
+  scene.add(grassInst);
+
+  // ======= أشجار (Instanced + LOD) =======
+  // نستخدم نموذج شجرة بسيط: جذع أسطواني وتيجان مخروطية متداخلة
+  function makeTreeMesh(){
+    const g = new THREE.Group();
+    const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.45,0.55,4,10), new THREE.MeshStandardMaterial({color:0x6b3b1a}));
+    trunk.position.y = 2; trunk.castShadow = true; trunk.receiveShadow = true;
+    g.add(trunk);
+    const crown1 = new THREE.Mesh(new THREE.ConeGeometry(2.6,3.2,10), new THREE.MeshStandardMaterial({color:0x0b5b2c}));
+    crown1.position.y = 4.2; crown1.castShadow = true; g.add(crown1);
+    const crown2 = new THREE.Mesh(new THREE.ConeGeometry(1.8,2.8,10), new THREE.MeshStandardMaterial({color:0x0f6d33}));
+    crown2.position.y = 5.3; crown2.castShadow = true; g.add(crown2);
+    return g;
+  }
+
+  const treesGroup = new THREE.Group();
+  const treeTemplate = makeTreeMesh();
+  // نستخرج geometies & materials لاستخدام InstancedMesh إن أردنا تحسين الأداء لاحقاً
+  for(let i=0;i<220;i++){
+    const t = treeTemplate.clone();
+    t.position.set((Math.random()-0.5)*320, 0, (Math.random()-0.5)*320);
+    const s = 0.7 + Math.random()*1.8; t.scale.set(s,s,s);
+    t.rotation.y = Math.random()*Math.PI*2;
+    treesGroup.add(t);
+  }
+  scene.add(treesGroup);
+
+  // ======= شخصية زكريا (إنسان كرتوني مفصّل جاهز) =======
+  // لبساطة الاعتماد على ملفات خارجية، نبني شخصية كرتونية مُفصّلة مكوّنة من أشكال هندسية،
+  // مع مد حركة بسيطة (يد/رجل).
+  const zak = new THREE.Group();
+  const skinMat = new THREE.MeshStandardMaterial({color:0xffd7b2, roughness:0.6});
+  const clothMat = new THREE.MeshStandardMaterial({color:0x2e8b57, roughness:0.8});
+  // رأس
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.6, 28, 24), skinMat); head.position.y = 2.55;
+  // عينين (مبسطة)
+  const eyeMat = new THREE.MeshStandardMaterial({color:0x000000});
+  const eyeL = new THREE.Mesh(new THREE.SphereGeometry(0.07,8,8), eyeMat); eyeL.position.set(-0.18,2.7,0.53);
+  const eyeR = eyeL.clone(); eyeR.position.x = 0.18;
+  // جسد وملابس
+  const torso = new THREE.Mesh(new THREE.BoxGeometry(1.2,1.6,0.7), clothMat); torso.position.y = 1.2;
+  const pelvis = new THREE.Mesh(new THREE.BoxGeometry(0.8,0.5,0.6), clothMat); pelvis.position.y = 0.55;
+  // أذرع وأرجل محسنة قليلاً
+  const armL = new THREE.Mesh(new THREE.CapsuleGeometry(0.17,0.8,4,8), skinMat); armL.position.set(-0.95,1.4,0);
+  const armR = armL.clone(); armR.position.x = 0.95;
+  const legL = new THREE.Mesh(new THREE.CapsuleGeometry(0.19,0.95,4,10), new THREE.MeshStandardMaterial({color:0x2b2b2b})); legL.position.set(-0.28, -0.35, 0);
+  const legR = legL.clone(); legR.position.x = 0.28;
+
+  zak.add(head, eyeL, eyeR, torso, pelvis, armL, armR, legL, legR);
+  zak.position.set(0, 0.6, 0);
+  zak.traverse(m=>{ if(m.isMesh){ m.castShadow=true; m.receiveShadow=true; } });
+  scene.add(zak);
+
+  // اسم فوق الشخصية
+  const nameTag = document.getElementById('nameTag');
+
+  // ======= عناصر قابلة للجمع: مخاريط عالية الجودة (مجموعات صغيرة) =======
+  const cones = [];
+  const coneMat = new THREE.MeshStandardMaterial({color:0x7b4a1b, metalness:0.05, roughness:0.9});
+  function spawnCone(x,z){
+    const g = new THREE.Group();
+    const c = new THREE.Mesh(new THREE.ConeGeometry(0.28,0.65,10), coneMat); c.position.y = 0.33; g.add(c);
+    // قاعدة صغيرة
+    const base = new THREE.Mesh(new THREE.CylinderGeometry(0.18,0.2,0.06,10), new THREE.MeshStandardMaterial({color:0x5a3411}));
+    base.position.y = 0.05; g.add(base);
+    g.position.set(x,0,z);
+    g.userData = {collected:false};
+    g.traverse(m=>{ if(m.isMesh){ m.castShadow=true; } });
+    scene.add(g); cones.push(g);
+  }
+  // توليد أولي
+  for(let i=0;i<120;i++){
+    spawnCone((Math.random()-0.5)*280, (Math.random()-0.5)*280);
+  }
+
+  // ======= فيزياء حركة بسيطة (ليس محرك فيزياء كامل) =======
+  const player = { speed: 6.0, runMul: 1.9, pos: zak.position, velY:0, onGround:true };
+  let move = { x:0, z:0, run:false, jump:false };
+
+  // ======= تحكم اللمس: عصا افتراضية + أزرار =======
+  const joy = document.getElementById('joy'), stick = document.getElementById('stick');
+  let joyCenter = null, dragging = false;
+  const maxRadius = 44; // مسافة أقصى نقل للـstick (px)
+  function getTouchPos(e){ const t = e.touches ? e.touches[0] : e; return {x: t.clientX, y: t.clientY}; }
+
+  function startDrag(e){
+    e.preventDefault();
+    dragging = true;
+    const rect = joy.getBoundingClientRect();
+    joyCenter = { x: rect.left + rect.width/2, y: rect.top + rect.height/2 };
+    onDrag(e);
+  }
+  function onDrag(e){
+    if(!dragging) return;
+    const p = getTouchPos(e);
+    let dx = p.x - joyCenter.x, dy = p.y - joyCenter.y;
+    const dist = Math.sqrt(dx*dx + dy*dy);
+    const clamped = Math.min(maxRadius, dist);
+    const nx = (dist === 0) ? 0 : dx/dist;
+    const ny = (dist === 0) ? 0 : dy/dist;
+    const stickX = nx * clamped; const stickY = ny * clamped;
+    stick.style.transform = `translate(${40 + stickX}px, ${40 + stickY}px)`;
+    // map to movement [-1..1]
+    move.x = (stickX / maxRadius);
+    move.z = -(stickY / maxRadius); // invert so up = forward
+  }
+  function endDrag(){
+    dragging = false;
+    stick.style.transform = `translate(0px,0px)`;
+    move.x = 0; move.z = 0;
+  }
+  joy.addEventListener('touchstart', startDrag, {passive:false});
+  joy.addEventListener('touchmove', onDrag, {passive:false});
+  joy.addEventListener('touchend', endDrag);
+  joy.addEventListener('mousedown', startDrag);
+  window.addEventListener('mousemove', onDrag);
+  window.addEventListener('mouseup', endDrag);
+
+  // أزرار القفز والجري
+  document.getElementById('btnJump').addEventListener('touchstart', (e)=>{ e.preventDefault(); move.jump = true; }, {passive:false});
+  document.getElementById('btnJump').addEventListener('click', ()=>{ move.jump = true; });
+  document.getElementById('btnRun').addEventListener('touchstart', (e)=>{ e.preventDefault(); move.run = true; }, {passive:false});
+  document.getElementById('btnRun').addEventListener('touchend', (e)=>{ move.run = false; }, {passive:false});
+  document.getElementById('btnRun').addEventListener('mousedown', ()=>{ move.run = true; });
+  document.getElementById('btnRun').addEventListener('mouseup', ()=>{ move.run = false; });
+
+  // أيضاً دعم لوحة مفاتيح
+  const keys = {}; window.addEventListener('keydown', e=>{ keys[e.key.toLowerCase()]=true; });
+  window.addEventListener('keyup', e=>{ keys[e.key.toLowerCase()]=false; });
+
+  // ======= وظيفة تحديث اسم فوق الشخصية =======
+  const nameDiv = document.getElementById('nameTag');
+  const tmpV = new THREE.Vector3();
+  function updateNameLabel(){
+    tmpV.setFromMatrixPosition(zak.matrixWorld);
+    tmpV.y += 2.6;
+    tmpV.project(camera);
+    const x = (tmpV.x * 0.5 + 0.5) * window.innerWidth;
+    const y = (-tmpV.y * 0.5 + 0.5) * window.innerHeight;
+    nameDiv.style.transform = `translate(-50%,-100%) translate(${x}px, ${y}px)`;
+  }
+
+  // ======= منطق جمع المخاريط =======
+  let score = 0;
+  function tryCollect(){
+    for(let i=cones.length-1;i>=0;i--){
+      const c = cones[i];
+      if(c.userData.collected) continue;
+      if(c.position.distanceTo(zak.position) < 1.2){
+        c.userData.collected = true;
+        scene.remove(c);
+        cones.splice(i,1);
+        score += 5;
+        document.getElementById('score').innerText = score;
+        // تأثير صغير عند الجمع
+        // نخفض الأداء لو كثير
+      }
+    }
+  }
+
+  // ======= حلقة التحديث الرئيسية =======
+  let last = performance.now();
+  function animate(now){
+    const dt = Math.min(0.05, (now - last)/1000);
+    last = now;
+
+    // لوحة مفاتيح كنسخة من اللمس
+    let keyX = 0, keyZ = 0;
+    if(keys['arrowup']||keys['w']) keyZ -= 1;
+    if(keys['arrowdown']||keys['s']) keyZ += 1;
+    if(keys['arrowleft']||keys['a']) keyX -= 1;
+    if(keys['arrowright']||keys['d']) keyX += 1;
+
+    const inputX = (Math.abs(keyX) + Math.abs(move.x) > 0) ? (keyX || move.x) : 0;
+    const inputZ = (Math.abs(keyZ) + Math.abs(move.z) > 0) ? (keyZ || move.z) : 0;
+
+    // تعديل السرعة بالجري
+    const mul = move.run || keys['shift'] ? player.runMul : 1.0;
+    const vx = inputX * player.speed * mul * dt;
+    const vz = inputZ * player.speed * mul * dt;
+
+    if(vx !== 0 || vz !== 0){
+      // حساب اتجاه الحركة بالنسبة لاتجاه الكاميرا
+      const forward = new THREE.Vector3();
+      camera.getWorldDirection(forward); forward.y = 0; forward.normalize();
+      const right = new THREE.Vector3().crossVectors(new THREE.Vector3(0,1,0), forward).normalize();
+      // تحول الحركة من محوري joystick إلى الاتجاه العالمي
+      const moveVec = new THREE.Vector3();
+      moveVec.addScaledVector(forward, -vz);
+      moveVec.addScaledVector(right, vx);
+      // نقل الشخصية (بشكل ناعم)
+      zak.position.add(moveVec);
+      // تدوير الشخصية ناحية الحركة
+      const angle = Math.atan2(moveVec.x, moveVec.z);
+      const diff = angle - zak.rotation.y;
+      zak.rotation.y += THREE.MathUtils.clamp(diff, -dt*8, dt*8);
+    }
+
+    // قفز بسيط
+    if((move.jump || keys[' ']) && player.onGround){
+      player.velY = 6.2; player.onGround = false; move.jump = false;
+    }
+    // جاذبية
+    if(!player.onGround){
+      player.velY -= 20 * dt;
+      zak.position.y += player.velY * dt;
+      if(zak.position.y <= 0.6){
+        zak.position.y = 0.6; player.velY = 0; player.onGround = true;
+      }
+    }
+
+    // تحديث الكاميرا لتتبع الشخصية (ثالث شخص)
+    updateCamera();
+
+    // جمع المخاريط
+    tryCollect();
+
+    // تحديث اسم الشخصية ومشهد المقاومة
+    updateNameLabel();
+
+    renderer.render(scene, camera);
+    requestAnimationFrame(animate);
+  }
+
+  function updateCamera(){
+    // الكاميرا تبقى خلف زكريا بمسافة ديناميكية حسب السرعة
+    const back = new THREE.Vector3(0, 4.0, 8.5);
+    back.applyAxisAngle(new THREE.Vector3(0,1,0), zak.rotation.y);
+    const target = new THREE.Vector3().copy(zak.position).add(back);
+    camera.position.lerp(target, 0.14);
+    const lookAt = new THREE.Vector3().copy(zak.position).add(new THREE.Vector3(0,1.5,0));
+    camera.lookAt(lookAt);
+  }
+
+  // ======= عداد الوقت والتحميل =======
+  let timeLeft = 180;
+  document.getElementById('timer').innerText = timeLeft;
+  const timerInterval = setInterval(()=>{
+    timeLeft--; document.getElementById('timer').innerText = timeLeft;
+    if(timeLeft <= 0){ clearInterval(timerInterval); alert('انتهى الوقت! نقاطك: ' + score); location.reload(); }
+  }, 1000);
+
+  // ======= تحسينات الأداء ديناميكية (LOD بسيط) =======
+  const performanceLabel = document.getElementById('performance');
+  function adaptQuality(){
+    const mem = navigator.deviceMemory || 2;
+    const isMobile = /Mobi|Android/i.test(navigator.userAgent);
+    if(isMobile && mem <= 2){
+      // خفّف التفاصيل للأجهزة الضعيفة
+      treesGroup.visible = true;
+      grassInst.visible = true;
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.2));
+      performanceLabel.innerText = 'LOD: LOW';
+    } else if(isMobile && mem <= 4){
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
+      performanceLabel.innerText = 'LOD: MED';
+    } else {
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+      performanceLabel.innerText = 'LOD: HIGH';
+    }
+  }
+  adaptQuality();
+
+  // تحميل مكتبة خارجية أو موديلات يمكن إضافتها هنا (تعليقات)
+  // مثال: لو أردت موديل زكريا مفصّل: استخدم GLTFLoader لتحميل glTF ثم استبدال مجموعة zak به.
+  // const loader = new THREE.GLTFLoader(); loader.load('path/to/zak.glb', (g)=>{ ... });
+
+  // إزالة شاشة التحميل بعد بدء المشهد
+  function start() {
+    const loadEl = document.getElementById('loading');
+    if(loadEl) loadEl.style.display = 'none';
+    last = performance.now();
+    requestAnimationFrame(animate);
+  }
+
+  // تهيئة الواجهة
+  window.addEventListener('resize', ()=>{ camera.aspect = window.innerWidth/window.innerHeight; camera.updateProjectionMatrix(); renderer.setSize(window.innerWidth, window.innerHeight); });
+
+  // تعيين تحكمات لوحة المفاتيح لتحريك مشابه
+  window.addEventListener('keydown', (e)=>{ if(e.key === 'Shift') move.run = true; });
+  window.addEventListener('keyup', (e)=>{ if(e.key === 'Shift') move.run = false; });
+
+  // بعد لحظة قصيرة، شغّل المشهد
+  setTimeout(start, 800);
+
+  // ======= مساعدات =================
+  function generateGrassCanvas(){
+    // نرسم نسيج عشب بسيط على كانفاس (يمكن استبداله بصورة خارجية لتحسين الجودة)
+    const s = 256;
+    const cvs = document.createElement('canvas'); cvs.width = s; cvs.height = s;
+    const ctx = cvs.getContext('2d');
+    const g = ctx.createLinearGradient(0,0,0,s);
+    g.addColorStop(0, '#3a8b4a'); g.addColorStop(1, '#1f6b3f');
+    ctx.fillStyle = g; ctx.fillRect(0,0,s,s);
+    // نقاط للتعرّف
+    for(let i=0;i<600;i++){
+      ctx.fillStyle = `rgba(${30+Math.random()*30},${90+Math.random()*80},${40+Math.random()*40},${0.8})`;
+      const x = Math.random()*s; const y = Math.random()*s;
+      ctx.fillRect(x, y, 1 + Math.random()*2, 1 + Math.random()*2);
+    }
+    return cvs;
+  }
+  </script>
+</body>
+</html>
